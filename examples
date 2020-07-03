@@ -1,0 +1,20 @@
+node('master') {
+    stage ("Run Testsuite on Jamaica 8 ${config}") {
+
+        def built = build job: 'Run-Examples-Jamaica-8-parameters', parameters: [[$class: 'StringParameterValue', name: 'configuration', value: config], 
+                                                                                [$class: 'StringParameterValue', name: 'platform', value: platform],
+                                                                                [$class: 'StringParameterValue', name: 'device', value: device],
+                                                                                [$class: 'StringParameterValue', name: 'deviceconfig', value: deviceconfig]],
+                        propagate: false
+        copyArtifacts(
+            projectName: 'Run-Examples-Jamaica-8-parameters', 
+            target: "reports",
+            filter: "*.xml",
+            selector: specific("${built.number}")
+        )
+        junit "reports/*.xml"
+        dir('reports') {
+            deleteDir()
+        }
+    }
+}

@@ -1,0 +1,272 @@
+
+
+def measureCommand(String output, String command) {
+    long start = System.currentTimeMillis()
+    sh command
+    long end = System.currentTimeMillis()
+    writeFile file: output, text: "YVALUE=" + (end - start)
+}
+
+def checkOpenJDKSources(String outputSynchronization, String outputLegacy) {
+    String stdout = sh(script: './bin/check-openjdk-sources.sh', returnStdout: true).trim()
+    def synchronizationHeaders = []
+    def synchronizationValues = []
+    String legacyValue = ""
+    stdout.readLines().each {
+        if ((it =~ /Missing aicas files:/) || (it =~ /Missing OpenJDK files:/) || (it =~ /Content mismatches:/)) {
+            String[] split = it.split(":")
+            synchronizationHeaders << split[0]
+            synchronizationValues << split[1].trim()
+        }
+        if (it =~ /Number of files in standardVM\/openjdk folder:/) {
+            String[] split = it.split(":")
+            legacyValue = split[1].trim()
+        }
+    }
+    writeFile file: outputSynchronization, text: synchronizationHeaders.join(',') + "\n" + synchronizationValues.join(',')
+    writeFile file: outputLegacy, text: "Legacy native OpenJDK files" + "\n" + legacyValue
+}
+
+def determineSize(String output, String glob) {
+    def files = findFiles glob: glob
+    long length = -1
+    if (files.length != 0) {
+        length = files[0].getLength()
+    }
+    writeFile file: output, text: "YVALUE=" + length
+}
+
+// branch: The Jamaica branch (e.g. "8","8-1" ...)
+def branch = "8"
+
+// start of the pipeline
+pipeline {
+
+    //TODO as soon as we get build slaves, this needs adjustment
+    agent {
+        label 'master'
+    }
+
+    // declaring env variables. We create a subdirectory for each configuration we build. A further split up by branch could be useful.
+    // this is not necessarily required, but would be very useful in case we want to build different configurations with the same jenkins job.
+    environment {
+        WORKSPACE_REAL="${env.WORKSPACE}/${params.configuration}"
+        build="${WORKSPACE_REAL}/build"
+        bench="${WORKSPACE_REAL}/bench"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+
+                script {
+                    currentBuild.displayName = "Build ${params.configuration}"
+                    currentBuild.description = "Build ${params.configuration} on Branch Jamaica-${branch}"
+                }
+
+                // deleting the libffi directory. This is just for safety, if the checked in libffi patches didn't get unapplied
+                dir("branch-${branch}/libffi") {
+                    deleteDir()
+                }
+
+                // checking out the complete mercurial forest repo by repo
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}",
+                        subdir: "jamaica-8-poc-${branch}",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/epm",
+                        subdir: "jamaica-8-poc-${branch}/epm",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/freetype",
+                        subdir: "jamaica-8-poc-${branch}/freetype",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/jamaica",
+                        subdir: "jamaica-8-poc-${branch}/jamaica",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/libffi",
+                        subdir: "jamaica-8-poc-${branch}/libffi",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/libffi/.hg/patches",
+                        subdir: "jamaica-8-poc-${branch}/libffi/.hg/patches",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/licenseserver",
+                        subdir: "jamaica-8-poc-${branch}/licenseserver",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg.aicas.burg//hg/customers/irdeto/jamaica-8-poc-${branch}/testsuite",
+                        subdir: "jamaica-8-poc-${branch}/testsuite",
+                        installation: 'default'
+                    ]
+                )
+            }
+        }
+
+        stage('Build') {
+            steps {
+
+                dir(build) {
+                    sh "${env.WORKSPACE}/branch-${branch}/jamaica/jconfigure -s configure.sh ${env.WORKSPACE}/branch-${branch}/jamaica/src/configurations/${params.configuration}.conf"
+                    measureCommand("${bench}/bench/configure.time", "./configure.sh")
+                    checkOpenJDKSources("${bench}/openjdk-synchronization.csv", "${bench}/openjdk-legacy.csv")
+                    measureCommand("${bench}/makedist.time",  "make && make dist_portable")
+                }
+
+                sh "java -jar ${env.HUDSON_PUBLIC}/tools/findbuild/FindBuild.jar -source ${build}/distribution -unpack ${WORKSPACE_REAL}/dist"
+
+                determineSize("${bench}/jamaicabuilder_bin.size", "${params.configuration}/build/bin/jamaicabuilder_bin")
+                determineSize("${bench}/jamaicavm_bin.size", "${params.configuration}/build/target/${params.platform}/bin/jamaicavm_bin")
+                determineSize("${bench}/jamaicavm_slim_bin.size", "${params.configuration}/build/target/${params.platform}/bin/jamaicavm_slim_bin")
+                determineSize("${bench}/native.size", "${params.configuration}/build/distribution/*.rpm")
+                determineSize("${bench}/portable.size", "${params.configuration}/build/distribution/*.tar.gz")
+            }
+        }
+
+        // Archive the build/test results for other jobs/users to use
+        stage('Archive') {
+            steps {
+                dir(build) {
+                    script {
+                        fileOperations ([
+                            folderCreateOperation(
+                                folderPath: 'distribution/reports'
+                            ),
+                            fileCopyOperation(
+                                includes: 'reports/TEST-*.xml',
+                                excludes: '',
+                                targetLocation: 'distribution/reports',
+                                flattenFiles: true
+                            ),
+                            fileCopyOperation(
+                                includes: 'target/*/reports/TEST-*.xml',
+                                excludes: '',
+                                targetLocation: 'distribution/reports',
+                                flattenFiles: true
+                            ),
+                            fileCopyOperation(
+                                includes: 'components/*/surefire-reports/TEST-*.xml',
+                                excludes: '',
+                                targetLocation: 'distribution/reports',
+                                flattenFiles: true
+                            )
+                        ])
+                    }
+                }
+                // archive build.tar.gz, debugsymbols and testreports
+                dir("${build}/distribution") {
+                    archiveArtifacts "*.tar.gz, reports/*.xml"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+
+            // run the unapply script for double safety
+            dir('branch-8') {
+                sh "./util/unapply.sh"
+            }
+
+            // invoke the plot plugin to graphically display the test results in the Jenkins job page
+            plot group: 'Jamaica Build',
+                 title: 'Build duration',
+                 numBuilds: '100',
+                 yaxis: 'ms',
+                 style: 'Line',
+                 csvFileName: 'durations.csv',
+                 propertiesSeries: [[ file: "${bench}/configure.time", label: 'configure' ],
+                                    [ file: "${bench}/makedist.time", label: 'make dist' ]]
+            plot group: 'Jamaica Build',
+                 title: 'Binary sizes',
+                 numBuilds: '100',
+                 yaxis: 'Bytes',
+                 style: 'Line',
+                 csvFileName: 'binary-sizes.csv',
+                 propertiesSeries: [[ file: "${bench}/jamaicabuilder_bin.size", label: 'jamaicabuilder_bin' ],
+                                    [ file: "${bench}/jamaicavm_bin.size", label: 'jamaicavm_bin' ],
+                                    [ file: "${bench}/jamaicavm_slim_bin.size", label: 'jamaicavm_slim_bin' ]]
+            plot group: 'Jamaica Build',
+                 title: 'Distribution sizes',
+                 numBuilds: '100',
+                 yaxis: 'Bytes',
+                 style: 'Line',
+                 csvFileName: 'distribution-sizes.csv',
+                 propertiesSeries: [[ file: "${bench}/native.size", label: 'native' ],
+                                    [ file: "${bench}/portable.size", label: 'portable' ]]
+            plot group: 'Jamaica Build',
+                 title: 'OpenJDK synchronization',
+                 numBuilds: '100',
+                 yaxis: '# files',
+                 style: 'Line',
+                 csvFileName: 'openjdk-synchronization.csv',
+                 csvSeries: [[ file: "${bench}/openjdk-synchronization.csv" ]]
+            plot group: 'Jamaica Build',
+                 title: 'Legacy native OpenJDK files',
+                 numBuilds: '100',
+                 yaxis: '# files',
+                 style: 'Line',
+                 csvFileName: 'openjdk-legacy.csv',
+                 csvSeries: [[ file: "${bench}/openjdk-legacy.csv" ]]
+
+            dir(build) {
+                junit "reports/TEST-*.xml, target/*/reports/TEST-*.xml, components/*/surefire-reports/TEST-*.xml"
+            }
+
+            // delete the directories to save disk space, but this also removes any debug data in case a build failes
+            dir(bench) {
+                deleteDir()
+            }
+
+            dir(build) {
+                deleteDir()
+            }
+        }
+    }
+}
+        }
+    }
+}
