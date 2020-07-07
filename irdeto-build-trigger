@@ -1,0 +1,131 @@
+def branch = "8-poc"
+
+// list of configurations
+// directly correspondes to configuration file names
+// get from environment TODO
+def configs = [
+    "linux-x86-linux-mips-irdeto"
+]
+
+// map of configuration -> platform
+// needed to identify builds for testing (testing pipeline wants to test irdeto configurations, can look up builds with linux-x86 as platform)
+// get from .xml TODO
+def platforms = [
+    "linux-x86_64": "linux-x86_64"
+]
+
+// map containing the dynamically created build jobs
+def builds = [:]
+
+// function creating jobs
+def getBuildClosure = { String config ->
+    return {
+        stage("build ${config}") {
+            build job: "Build-Jamaica-${branch}-parameters", parameters: [
+                    [$class: 'StringParameterValue', name: 'configuration', value: "${config}"], 
+                    [$class: 'StringParameterValue', name: 'platform', value: platforms["${config}"]]
+                ]
+        }
+    }
+}
+
+pipeline {
+    agent {
+		label 'master'
+	}
+
+    stages {
+        // This stage is required if triggering by SCM changes
+        // TODO save hg revisions to checkout specific revisions
+        checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}",
+                        subdir: "jamaica-${branch}",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/epm",
+                        subdir: "jamaica-${branch}/epm",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/freetype",
+                        subdir: "jamaica-${branch}/freetype",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/jamaica",
+                        subdir: "jamaica-${branch}/jamaica",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/libffi",
+                        subdir: "jamaica-${branch}/libffi",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/libffi/.hg/patches",
+                        subdir: "jamaica-${branch}/libffi/.hg/patches",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/licenseserver",
+                        subdir: "jamaica-${branch}/licenseserver",
+                        installation: 'default'
+                    ]
+                )
+                checkout(
+                    scm: [
+                        $class: 'MercurialSCM',
+                        clean: true,
+                        source: "ssh://hg@hg//hg/customers/irdeto/jamaica-${branch}/testsuite",
+                        subdir: "jamaica-${branch}/testsuite",
+                        installation: 'default'
+                    ]
+                )
+            }
+        }
+
+        stage('Trigger Building and Testing'){
+            steps {
+                script {
+                    // create jobs for all configurations
+                    for (int i = 0; i < configs.size(); i++) {
+                        echo "${configs[i]}"
+                        builds["${configs[i]}"] = getBuildClosure("${configs[i]}")
+                    }
+
+                     // start all build jobs in parallel
+                    parallel builds
+				}
+            }
+        }
+    }
+}
+
